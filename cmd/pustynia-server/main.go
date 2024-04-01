@@ -1,38 +1,87 @@
 package main
 
 import (
+	"crypto/tls"
+	"errors"
 	"io"
 	"log"
 	"net"
+	"os"
+	"os/signal"
+	"strings"
+	"sync"
+	"syscall"
 )
 
 func main() {
-	l, err := net.Listen("tcp", ":3000")
+	cert, err := tls.LoadX509KeyPair("cert.pem", "key.pem")
 	if err != nil {
 		log.Fatalln(err)
 	}
-	defer l.Close()
+	listener, err := tls.Listen("tcp", ":3000", &tls.Config{
+		Certificates: []tls.Certificate{cert},
+		MinVersion:   tls.VersionTLS13,
+	})
+	if err != nil {
+		log.Fatalln(err)
+	}
+	defer listener.Close()
+	var wg sync.WaitGroup
+	defer wg.Wait()
+	quit := make(chan struct{})
+	defer close(quit)
+	interrupt := make(chan os.Signal, 1)
+	signal.Notify(interrupt, syscall.SIGTERM, syscall.SIGINT)
+	go func() {
+		<-interrupt
+		listener.Close()
+	}()
 	for {
-		conn, err := l.Accept()
+		conn, err := listener.Accept()
 		if err != nil {
-			log.Println(err)
-			continue
+			if !errors.Is(err, net.ErrClosed) {
+				log.Println(err)
+			}
+			return
 		}
+		wg.Add(1)
 		go func() {
+			defer wg.Done()
+			done := make(chan struct{})
+			defer func() {
+				<-done
+			}()
 			defer conn.Close()
-			b := make([]byte, 4096)
-			for {
-				n, err := conn.Read(b)
-				if err != nil {
-					if err != io.EOF {
-						log.Println(err)
+			go func() {
+				defer close(done)
+				buf := make([]byte, 4096)
+				for {
+					n, err := conn.Read(buf)
+					if err != nil {
+						if err != io.EOF && !errors.Is(err, net.ErrClosed) {
+							log.Println(err)
+						}
+						return
 					}
-					return
+					items := strings.SplitN(strings.TrimSpace(string(buf[:n])), " ", 2)
+					switch items[0] {
+					case "ECHO":
+						if _, err := conn.Write([]byte(items[1])); err != nil {
+							if err != io.EOF && !errors.Is(err, net.ErrClosed) {
+								log.Println(err)
+							}
+							return
+						}
+					case "QUIT":
+						return
+					}
 				}
-				if _, err = conn.Write(b[:n]); err != nil {
-					log.Println(err)
-					return
-				}
+			}()
+			select {
+			case <-quit:
+				return
+			case <-done:
+				return
 			}
 		}()
 	}

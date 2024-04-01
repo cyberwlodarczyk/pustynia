@@ -2,49 +2,64 @@ package main
 
 import (
 	"bufio"
-	"bytes"
+	"crypto/tls"
 	"fmt"
+	"io"
 	"log"
-	"net"
 	"os"
+	"os/signal"
+	"syscall"
 )
 
 func main() {
-	conn, err := net.Dial("tcp", ":3000")
+	conn, err := tls.Dial("tcp", ":3000", &tls.Config{InsecureSkipVerify: true})
 	if err != nil {
 		log.Fatalln(err)
 	}
 	defer conn.Close()
-	stop := make(chan struct{})
+	quit := make(chan struct{})
+	interrupt := make(chan os.Signal, 1)
+	signal.Notify(interrupt, syscall.SIGTERM, syscall.SIGINT)
 	go func() {
-		b := make([]byte, 4096)
+		<-interrupt
+		close(quit)
+	}()
+	go func() {
+		defer close(quit)
+		buf := make([]byte, 4096)
 		for {
-			select {
-			case <-stop:
-				return
-			default:
-				n, err := conn.Read(b)
-				if err != nil {
+			n, err := conn.Read(buf)
+			if err != nil {
+				if err != io.EOF {
 					log.Println(err)
-					return
 				}
-				fmt.Println(string(b[:n]))
+				return
 			}
+			fmt.Println(string(buf[:n]))
 		}
 	}()
-	s := bufio.NewScanner(os.Stdin)
-	for s.Scan() {
-		msg := s.Bytes()
-		if bytes.Equal(msg, []byte("exit")) {
-			close(stop)
-			break
+	input := make(chan string)
+	go func() {
+		defer close(quit)
+		s := bufio.NewScanner(os.Stdin)
+		for s.Scan() {
+			input <- s.Text()
 		}
-		if _, err = conn.Write(msg); err != nil {
+		if err := s.Err(); err != nil {
 			log.Println(err)
-			break
 		}
-	}
-	if err = s.Err(); err != nil {
-		log.Fatalln(err)
+	}()
+	for {
+		select {
+		case <-quit:
+			return
+		case msg := <-input:
+			if _, err = conn.Write([]byte(msg)); err != nil {
+				if err != io.EOF {
+					log.Println(err)
+				}
+				return
+			}
+		}
 	}
 }
