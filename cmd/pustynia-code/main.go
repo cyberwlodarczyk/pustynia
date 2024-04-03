@@ -8,7 +8,7 @@ import (
 )
 
 func main() {
-	c, err := pustynia.NewCode(nil)
+	c, err := pustynia.NewCode()
 	if err != nil {
 		log.Fatalln(err)
 	}

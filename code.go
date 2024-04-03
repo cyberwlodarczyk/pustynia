@@ -1,67 +1,36 @@
 package pustynia
 
-import (
-	"bytes"
-	"crypto/rand"
-)
+import "crypto/rand"
 
-var DefaultCodeParams = &CodeParams{
-	Alphabet:   []byte("abcdefghijklmnopqrstuvwxyz"),
-	Separator:  '-',
-	ChunkSize:  3,
-	ChunkCount: 3,
-}
+const CodeSize = 11
 
-type CodeParams struct {
-	Alphabet   []byte
-	Separator  byte
-	ChunkSize  int
-	ChunkCount int
-}
+type Code [CodeSize]byte
 
-func (p *CodeParams) size() int {
-	return p.ChunkCount*p.ChunkSize + p.ChunkCount - 1
-}
-
-func (p *CodeParams) separator(i int) bool {
-	return (i-p.ChunkSize)%(p.ChunkSize+1) == 0
-}
-
-func NewCode(p *CodeParams) ([]byte, error) {
-	if p == nil {
-		p = DefaultCodeParams
-	}
-	n := p.size()
-	c := make([]byte, n)
-	r := make([]byte, n)
+func NewCode() (Code, error) {
+	var c Code
+	r := make([]byte, CodeSize-2)
 	if _, err := rand.Read(r); err != nil {
-		return nil, err
+		return c, err
 	}
-	for i := 0; i < n; i++ {
-		if p.separator(i) {
-			c[i] = p.Separator
+	for i, j := 0, 0; i < CodeSize; i++ {
+		if i == 3 || i == 7 {
+			c[i] = '-'
 		} else {
-			c[i] = p.Alphabet[int(r[i])%len(p.Alphabet)]
+			c[i] = 'a' + r[j]%('z'-'a'+1)
+			j++
 		}
 	}
 	return c, nil
 }
 
-func IsValidCode(p *CodeParams, c []byte) bool {
-	if p == nil {
-		p = DefaultCodeParams
-	}
-	n := p.size()
-	if len(c) != n {
-		return false
-	}
-	for i := 0; i < n; i++ {
-		if p.separator(i) {
-			if c[i] != p.Separator {
+func IsValidCode(c Code) bool {
+	for i := 0; i < CodeSize; i++ {
+		if i == 3 || i == 7 {
+			if c[i] != '-' {
 				return false
 			}
 		} else {
-			if bytes.IndexByte(p.Alphabet, c[i]) == -1 {
+			if c[i] < 'a' || c[i] > 'z' {
 				return false
 			}
 		}
