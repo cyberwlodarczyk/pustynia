@@ -6,6 +6,14 @@ const CodeSize = 11
 
 type Code [CodeSize]byte
 
+func (c Code) String() string {
+	return string(c.Bytes())
+}
+
+func (c Code) Bytes() []byte {
+	return c[:]
+}
+
 func NewCode() (Code, error) {
 	var c Code
 	r := make([]byte, CodeSize-2)
@@ -23,17 +31,22 @@ func NewCode() (Code, error) {
 	return c, nil
 }
 
-func IsValidCode(c Code) bool {
+func ParseCode(s string) (Code, bool) {
+	var c Code
+	if len(s) != CodeSize {
+		return c, false
+	}
 	for i := 0; i < CodeSize; i++ {
 		if i == 3 || i == 7 {
-			if c[i] != '-' {
-				return false
+			if s[i] != '-' {
+				return c, false
 			}
 		} else {
-			if c[i] < 'a' || c[i] > 'z' {
-				return false
+			if s[i] < 'a' || s[i] > 'z' {
+				return c, false
 			}
 		}
 	}
-	return true
+	copy(c[:], s)
+	return c, true
 }

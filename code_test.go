@@ -8,13 +8,13 @@ func TestNewCode(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !IsValidCode(c) {
+		if _, ok := ParseCode(c.String()); !ok {
 			t.Fatalf("expected %q to be valid", c)
 		}
 	}
 }
 
-func TestIsValidCode(t *testing.T) {
+func TestParseCode(t *testing.T) {
 	tests := []struct {
 		code     string
 		expected bool
@@ -27,15 +27,18 @@ func TestIsValidCode(t *testing.T) {
 		{"pqopscodnso", false},
 		{"-spdj-sodsm", false},
 	}
-	var c Code
 	for _, test := range tests {
-		copy(c[:], test.code)
-		got := IsValidCode(c)
+		code, got := ParseCode(test.code)
 		if got != test.expected {
 			if test.expected {
 				t.Fatalf("expected %q to be valid", test.code)
 			} else {
 				t.Fatalf("expected %q to be invalid", test.code)
+			}
+		} else if got {
+			str := code.String()
+			if str != test.code {
+				t.Fatalf("expected %q but got %q", test.code, str)
 			}
 		}
 	}
