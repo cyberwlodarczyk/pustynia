@@ -1,65 +1,43 @@
 package main
 
 import (
-	"bufio"
 	"crypto/tls"
-	"fmt"
-	"io"
+	"flag"
 	"log"
 	"os"
 	"os/signal"
 	"syscall"
+
+	"github.com/cyberwlodarczyk/pustynia"
 )
 
 func main() {
-	conn, err := tls.Dial("tcp", ":3000", &tls.Config{InsecureSkipVerify: true})
+	addr := flag.String("addr", ":8888", "server address")
+	room := flag.String("room", "", "room code")
+	flag.Parse()
+	if *room == "" {
+		log.Fatalln("please specify the --room flag")
+	}
+	roomID, ok := pustynia.ParseCode(*room)
+	if !ok {
+		log.Fatalln("please specify the valid --room flag")
+	}
+	client, err := pustynia.NewClient(&pustynia.ClientConfig{
+		RoomID:    roomID,
+		Addr:      *addr,
+		TLSConfig: &tls.Config{InsecureSkipVerify: true},
+	})
 	if err != nil {
 		log.Fatalln(err)
 	}
-	defer conn.Close()
-	quit := make(chan struct{})
+	defer client.Close()
 	interrupt := make(chan os.Signal, 1)
 	signal.Notify(interrupt, syscall.SIGTERM, syscall.SIGINT)
 	go func() {
 		<-interrupt
-		close(quit)
+		client.Close()
 	}()
-	go func() {
-		defer close(quit)
-		buf := make([]byte, 4096)
-		for {
-			n, err := conn.Read(buf)
-			if err != nil {
-				if err != io.EOF {
-					log.Println(err)
-				}
-				return
-			}
-			fmt.Println(string(buf[:n]))
-		}
-	}()
-	input := make(chan string)
-	go func() {
-		defer close(quit)
-		s := bufio.NewScanner(os.Stdin)
-		for s.Scan() {
-			input <- s.Text()
-		}
-		if err := s.Err(); err != nil {
-			log.Println(err)
-		}
-	}()
-	for {
-		select {
-		case <-quit:
-			return
-		case msg := <-input:
-			if _, err = conn.Write([]byte(msg)); err != nil {
-				if err != io.EOF {
-					log.Println(err)
-				}
-				return
-			}
-		}
+	if err = client.Run(); err != nil {
+		log.Fatalln(err)
 	}
 }
