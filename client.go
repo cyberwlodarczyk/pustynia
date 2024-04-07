@@ -2,6 +2,7 @@ package pustynia
 
 import (
 	"bufio"
+	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
@@ -20,6 +21,7 @@ import (
 
 type ClientConfig struct {
 	RoomID    Code
+	Username  string
 	Password  []byte
 	Addr      string
 	TLSConfig *tls.Config
@@ -27,6 +29,7 @@ type ClientConfig struct {
 
 type Client struct {
 	roomID Code
+	label  []byte
 	gcm    cipher.AEAD
 	conn   net.Conn
 	once   sync.Once
@@ -51,6 +54,7 @@ func NewClient(cfg *ClientConfig) (*Client, error) {
 	}
 	return &Client{
 		roomID: cfg.RoomID,
+		label:  []byte(fmt.Sprintf("%s> ", cfg.Username)),
 		gcm:    gcm,
 		conn:   conn,
 		quit:   make(chan empty),
@@ -96,17 +100,28 @@ func (c *Client) Run() error {
 				fail <- err
 				return
 			}
+			for i := 0; i < len(c.label); i++ {
+				fmt.Print("\b \b")
+			}
 			fmt.Printf("%s\n", plaintext)
+			fmt.Printf("%s", c.label)
 		}
 	}()
 	input := make(chan []byte)
 	go func() {
 		<-join
 		s := bufio.NewScanner(os.Stdin)
-		for s.Scan() {
-			input <- s.Bytes()
+		for {
+			fmt.Printf("%s", c.label)
+			if !s.Scan() {
+				fail <- s.Err()
+				return
+			}
+			var b bytes.Buffer
+			b.Write(c.label)
+			b.Write(s.Bytes())
+			input <- b.Bytes()
 		}
-		fail <- s.Err()
 	}()
 	for {
 		select {

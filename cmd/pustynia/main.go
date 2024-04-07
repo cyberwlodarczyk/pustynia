@@ -16,6 +16,7 @@ import (
 func main() {
 	addr := flag.String("addr", ":8888", "server address")
 	room := flag.String("room", "", "room code")
+	username := flag.String("user", "anonymous", "room username")
 	flag.Parse()
 	if *room == "" {
 		log.Fatalln("please specify the --room flag")
@@ -32,6 +33,7 @@ func main() {
 	fmt.Print("\n")
 	client, err := pustynia.NewClient(&pustynia.ClientConfig{
 		RoomID:    roomID,
+		Username:  *username,
 		Password:  password,
 		Addr:      *addr,
 		TLSConfig: &tls.Config{InsecureSkipVerify: true},
