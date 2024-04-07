@@ -3,12 +3,14 @@ package main
 import (
 	"crypto/tls"
 	"flag"
+	"fmt"
 	"log"
 	"os"
 	"os/signal"
 	"syscall"
 
 	"github.com/cyberwlodarczyk/pustynia"
+	"golang.org/x/term"
 )
 
 func main() {
@@ -22,8 +24,15 @@ func main() {
 	if !ok {
 		log.Fatalln("please specify the valid --room flag")
 	}
+	fmt.Print("password: ")
+	password, err := term.ReadPassword(int(os.Stdin.Fd()))
+	if err != nil {
+		log.Fatalln(err)
+	}
+	fmt.Print("\n")
 	client, err := pustynia.NewClient(&pustynia.ClientConfig{
 		RoomID:    roomID,
+		Password:  password,
 		Addr:      *addr,
 		TLSConfig: &tls.Config{InsecureSkipVerify: true},
 	})
