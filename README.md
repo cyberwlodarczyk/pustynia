@@ -8,7 +8,6 @@ This project is a very simple chat service with minimalistic end-to-end encrypti
 
 Due to lack of time this project lacks very important features, such as:
 
-- Password validation
 - Logging
 - Chat history
 - Permissions

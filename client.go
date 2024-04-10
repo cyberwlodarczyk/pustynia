@@ -9,6 +9,7 @@ import (
 	"crypto/sha256"
 	"crypto/tls"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -18,6 +19,8 @@ import (
 
 	"golang.org/x/crypto/argon2"
 )
+
+var ErrInvalidPassword = errors.New("pustynia: invalid password")
 
 type ClientConfig struct {
 	RoomID    Code
@@ -30,7 +33,8 @@ type ClientConfig struct {
 type Client struct {
 	roomID Code
 	label  []byte
-	gcm    cipher.AEAD
+	hash   [sha256.Size]byte
+	aead   cipher.AEAD
 	conn   net.Conn
 	once   sync.Once
 	quit   chan empty
@@ -44,7 +48,7 @@ func NewClient(cfg *ClientConfig) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	gcm, err := cipher.NewGCM(block)
+	aead, err := cipher.NewGCM(block)
 	if err != nil {
 		return nil, err
 	}
@@ -55,7 +59,8 @@ func NewClient(cfg *ClientConfig) (*Client, error) {
 	return &Client{
 		roomID: cfg.RoomID,
 		label:  []byte(fmt.Sprintf("%s> ", cfg.Username)),
-		gcm:    gcm,
+		hash:   sha256.Sum256(cfg.Password),
+		aead:   aead,
 		conn:   conn,
 		quit:   make(chan empty),
 	}, nil
@@ -85,6 +90,17 @@ func (c *Client) Run() error {
 		if !write(c.roomID.Bytes()) {
 			return
 		}
+		if !write(c.hash[:]) {
+			return
+		}
+		var ok [1]byte
+		if !read(ok[:]) {
+			return
+		}
+		if ok[0] == 0 {
+			fail <- ErrInvalidPassword
+			return
+		}
 		close(join)
 		for {
 			msg := make([]byte, 16)
@@ -95,7 +111,7 @@ func (c *Client) Run() error {
 			if !read(ciphertext) {
 				return
 			}
-			plaintext, err := c.gcm.Open(nil, msg[:12], ciphertext, nil)
+			plaintext, err := c.aead.Open(nil, msg[:12], ciphertext, nil)
 			if err != nil {
 				fail <- err
 				return
@@ -134,7 +150,7 @@ func (c *Client) Run() error {
 			if _, err := io.ReadFull(rand.Reader, msg[:12]); err != nil {
 				return err
 			}
-			msg = c.gcm.Seal(msg, msg[:12], plaintext, nil)
+			msg = c.aead.Seal(msg, msg[:12], plaintext, nil)
 			binary.BigEndian.PutUint32(msg[12:16], uint32(len(msg[16:])))
 			write(msg)
 		}

@@ -2,6 +2,7 @@ package main
 
 import (
 	"crypto/tls"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -49,6 +50,10 @@ func main() {
 		client.Close()
 	}()
 	if err = client.Run(); err != nil {
-		log.Fatalln(err)
+		if errors.Is(err, pustynia.ErrInvalidPassword) {
+			fmt.Println("invalid password")
+		} else {
+			log.Fatalln(err)
+		}
 	}
 }

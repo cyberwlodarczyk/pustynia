@@ -1,6 +1,7 @@
 package pustynia
 
 import (
+	"crypto/sha256"
 	"crypto/tls"
 	"errors"
 	"io"
@@ -8,6 +9,11 @@ import (
 	"net"
 	"sync"
 )
+
+type room struct {
+	hash  [sha256.Size]byte
+	users map[int]chan []byte
+}
 
 type ServerConfig struct {
 	Addr      string
@@ -21,7 +27,7 @@ type Server struct {
 	quit     chan empty
 	rwMutex  sync.RWMutex
 	userID   int
-	rooms    map[Code]map[int]chan []byte
+	rooms    map[Code]room
 }
 
 func NewServer(cfg *ServerConfig) (*Server, error) {
@@ -32,7 +38,7 @@ func NewServer(cfg *ServerConfig) (*Server, error) {
 	return &Server{
 		listener: listener,
 		quit:     make(chan empty),
-		rooms:    make(map[Code]map[int]chan []byte),
+		rooms:    make(map[Code]room),
 	}, nil
 }
 
@@ -41,30 +47,34 @@ type session struct {
 	userID int
 }
 
-func (s *Server) joinRoom(roomID Code) *session {
+func (s *Server) joinRoom(roomID Code, hash [sha256.Size]byte) *session {
 	s.rwMutex.Lock()
 	defer s.rwMutex.Unlock()
-	room, ok := s.rooms[roomID]
-	if !ok {
-		room = make(map[int]chan []byte)
-		s.rooms[roomID] = room
+	r, ok := s.rooms[roomID]
+	if ok {
+		if r.hash != hash {
+			return nil
+		}
+	} else {
+		r = room{hash, make(map[int]chan []byte)}
+		s.rooms[roomID] = r
 	}
 	userID := s.userID
 	s.userID++
-	room[userID] = make(chan []byte)
+	r.users[userID] = make(chan []byte)
 	return &session{roomID, userID}
 }
 
 func (s *Server) leaveRoom(sess *session) {
 	s.rwMutex.RLock()
-	room := s.rooms[sess.roomID]
-	ch := room[sess.userID]
-	ch <- nil
+	r := s.rooms[sess.roomID]
+	ch := r.users[sess.userID]
+	close(ch)
 	s.rwMutex.RUnlock()
 	s.rwMutex.Lock()
 	defer s.rwMutex.Unlock()
-	delete(room, sess.userID)
-	if len(room) == 0 {
+	delete(r.users, sess.userID)
+	if len(r.users) == 0 {
 		delete(s.rooms, sess.roomID)
 	}
 }
@@ -72,7 +82,8 @@ func (s *Server) leaveRoom(sess *session) {
 func (s *Server) sendMessage(sess *session, msg []byte) {
 	s.rwMutex.RLock()
 	defer s.rwMutex.RUnlock()
-	for userID, ch := range s.rooms[sess.roomID] {
+	r := s.rooms[sess.roomID]
+	for userID, ch := range r.users {
 		if userID != sess.userID {
 			ch <- msg
 		}
@@ -81,7 +92,8 @@ func (s *Server) sendMessage(sess *session, msg []byte) {
 
 func (s *Server) recvMessage(sess *session) []byte {
 	s.rwMutex.RLock()
-	ch := s.rooms[sess.roomID][sess.userID]
+	r := s.rooms[sess.roomID]
+	ch := r.users[sess.userID]
 	s.rwMutex.RUnlock()
 	return <-ch
 }
@@ -90,6 +102,26 @@ func (s *Server) handleConnection(conn net.Conn) {
 	var sess *session
 	exit := make(chan empty)
 	join := make(chan empty)
+	check := func(n int, err error) (int, bool) {
+		if err != nil {
+			if !isClosed(err) {
+				log.Println(err)
+			}
+			return 0, false
+		}
+		return n, true
+	}
+	read := func(b []byte) (int, bool) {
+		return check(conn.Read(b))
+	}
+	readFull := func(b []byte) bool {
+		_, ok := check(io.ReadFull(conn, b))
+		return ok
+	}
+	write := func(b []byte) bool {
+		_, ok := check(conn.Write(b))
+		return ok
+	}
 	leave := sync.OnceFunc(func() {
 		if sess != nil {
 			s.leaveRoom(sess)
@@ -105,10 +137,7 @@ func (s *Server) handleConnection(conn net.Conn) {
 			if msg == nil {
 				return
 			}
-			if _, err := conn.Write(msg); err != nil {
-				if !isClosed(err) {
-					log.Println(err)
-				}
+			if !write(msg) {
 				return
 			}
 		}
@@ -118,24 +147,29 @@ func (s *Server) handleConnection(conn net.Conn) {
 		buf := make([]byte, 4096)
 		for {
 			code := make([]byte, CodeSize)
-			if _, err := io.ReadFull(conn, code); err != nil {
-				if !isClosed(err) {
-					log.Println(err)
-				}
+			if !readFull(code) {
 				return
 			}
 			roomID, ok := ParseCode(string(code))
 			if !ok {
 				return
 			}
-			sess = s.joinRoom(roomID)
+			var hash [sha256.Size]byte
+			if !readFull(hash[:]) {
+				return
+			}
+			sess = s.joinRoom(roomID, hash)
+			if sess == nil {
+				write([]byte{0})
+				return
+			}
+			if !write([]byte{1}) {
+				return
+			}
 			close(join)
 			for {
-				n, err := conn.Read(buf)
-				if err != nil {
-					if !isClosed(err) {
-						log.Println(err)
-					}
+				n, ok := read(buf)
+				if !ok {
 					return
 				}
 				s.sendMessage(sess, buf[:n])
