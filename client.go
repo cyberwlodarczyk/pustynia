@@ -38,6 +38,9 @@ type Client struct {
 	conn   net.Conn
 	once   sync.Once
 	quit   chan empty
+	fail   chan error
+	join   chan empty
+	input  chan []byte
 }
 
 func NewClient(cfg *ClientConfig) (*Client, error) {
@@ -63,96 +66,103 @@ func NewClient(cfg *ClientConfig) (*Client, error) {
 		aead:   aead,
 		conn:   conn,
 		quit:   make(chan empty),
+		fail:   make(chan error),
+		join:   make(chan empty),
+		input:  make(chan []byte),
 	}, nil
 }
 
-func (c *Client) Run() error {
-	fail := make(chan error)
-	join := make(chan empty)
-	check := func(_ int, err error) bool {
+func (c *Client) isError(_ int, err error) bool {
+	if err != nil {
+		if isClosed(err) {
+			c.fail <- nil
+		} else {
+			c.fail <- err
+		}
+		return false
+	}
+	return true
+}
+
+func (c *Client) read(b []byte) bool {
+	return c.isError(io.ReadFull(c.conn, b))
+}
+
+func (c *Client) write(b []byte) bool {
+	return c.isError(c.conn.Write(b))
+}
+
+func (c *Client) recv() {
+	if !c.write(c.roomID.Bytes()) {
+		return
+	}
+	if !c.write(c.hash[:]) {
+		return
+	}
+	var ok [1]byte
+	if !c.read(ok[:]) {
+		return
+	}
+	if ok[0] == 0 {
+		c.fail <- ErrInvalidPassword
+		return
+	}
+	close(c.join)
+	for {
+		msg := make([]byte, 16)
+		if !c.read(msg) {
+			return
+		}
+		ciphertext := make([]byte, int(binary.BigEndian.Uint32(msg[12:])))
+		if !c.read(ciphertext) {
+			return
+		}
+		plaintext, err := c.aead.Open(nil, msg[:12], ciphertext, nil)
 		if err != nil {
-			if isClosed(err) {
-				fail <- nil
-			} else {
-				fail <- err
-			}
-			return false
+			c.fail <- err
+			return
 		}
-		return true
+		for i := 0; i < len(c.label); i++ {
+			fmt.Print("\b \b")
+		}
+		fmt.Printf("%s\n", plaintext)
+		fmt.Printf("%s", c.label)
 	}
-	read := func(b []byte) bool {
-		return check(io.ReadFull(c.conn, b))
+}
+
+func (c *Client) scan() {
+	<-c.join
+	s := bufio.NewScanner(os.Stdin)
+	for {
+		fmt.Printf("%s", c.label)
+		if !s.Scan() {
+			c.fail <- s.Err()
+			return
+		}
+		var b bytes.Buffer
+		b.Write(c.label)
+		b.Write(s.Bytes())
+		c.input <- b.Bytes()
 	}
-	write := func(b []byte) bool {
-		return check(c.conn.Write(b))
-	}
-	go func() {
-		if !write(c.roomID.Bytes()) {
-			return
-		}
-		if !write(c.hash[:]) {
-			return
-		}
-		var ok [1]byte
-		if !read(ok[:]) {
-			return
-		}
-		if ok[0] == 0 {
-			fail <- ErrInvalidPassword
-			return
-		}
-		close(join)
-		for {
-			msg := make([]byte, 16)
-			if !read(msg) {
-				return
-			}
-			ciphertext := make([]byte, int(binary.BigEndian.Uint32(msg[12:])))
-			if !read(ciphertext) {
-				return
-			}
-			plaintext, err := c.aead.Open(nil, msg[:12], ciphertext, nil)
-			if err != nil {
-				fail <- err
-				return
-			}
-			for i := 0; i < len(c.label); i++ {
-				fmt.Print("\b \b")
-			}
-			fmt.Printf("%s\n", plaintext)
-			fmt.Printf("%s", c.label)
-		}
-	}()
-	input := make(chan []byte)
-	go func() {
-		<-join
-		s := bufio.NewScanner(os.Stdin)
-		for {
-			fmt.Printf("%s", c.label)
-			if !s.Scan() {
-				fail <- s.Err()
-				return
-			}
-			var b bytes.Buffer
-			b.Write(c.label)
-			b.Write(s.Bytes())
-			input <- b.Bytes()
-		}
-	}()
+}
+
+func (c *Client) Run() error {
+	go c.recv()
+	go c.scan()
 	for {
 		select {
 		case <-c.quit:
 			return nil
-		case err := <-fail:
+		case err := <-c.fail:
 			return err
-		case plaintext := <-input:
+		case plaintext := <-c.input:
 			msg := make([]byte, 16)
 			if _, err := io.ReadFull(rand.Reader, msg[:12]); err != nil {
 				return err
 			}
 			msg = c.aead.Seal(msg, msg[:12], plaintext, nil)
 			binary.BigEndian.PutUint32(msg[12:16], uint32(len(msg[16:])))
-			write(msg)
+			c.write(msg)
 		}
 	}
 }

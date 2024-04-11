@@ -18,9 +18,11 @@ type room struct {
 type ServerConfig struct {
 	Addr      string
 	TLSConfig *tls.Config
+	ErrorLog  *log.Logger
 }
 
 type Server struct {
+	errorLog *log.Logger
 	listener net.Listener
 	wg       sync.WaitGroup
 	once     sync.Once
@@ -31,11 +33,15 @@ type Server struct {
 }
 
 func NewServer(cfg *ServerConfig) (*Server, error) {
+	if cfg.ErrorLog == nil {
+		cfg.ErrorLog = log.Default()
+	}
 	listener, err := tls.Listen("tcp", cfg.Addr, cfg.TLSConfig)
 	if err != nil {
 		return nil, err
 	}
 	return &Server{
+		errorLog: cfg.ErrorLog,
 		listener: listener,
 		quit:     make(chan empty),
 		rooms:    make(map[Code]room),
@@ -98,92 +104,109 @@ func (s *Server) recvMessage(sess *session) []byte {
 	return <-ch
 }
 
-func (s *Server) handleConnection(conn net.Conn) {
-	var sess *session
-	exit := make(chan empty)
-	join := make(chan empty)
-	check := func(n int, err error) (int, bool) {
-		if err != nil {
-			if !isClosed(err) {
-				log.Println(err)
-			}
-			return 0, false
+func (s *Server) isError(n int, err error) (int, bool) {
+	if err != nil {
+		if !isClosed(err) {
+			s.errorLog.Println(err)
 		}
-		return n, true
+		return 0, false
 	}
-	read := func(b []byte) (int, bool) {
-		return check(conn.Read(b))
-	}
-	readFull := func(b []byte) bool {
-		_, ok := check(io.ReadFull(conn, b))
-		return ok
-	}
-	write := func(b []byte) bool {
-		_, ok := check(conn.Write(b))
-		return ok
-	}
-	leave := sync.OnceFunc(func() {
-		if sess != nil {
-			s.leaveRoom(sess)
-			sess = nil
+	return n, true
+}
+
+type peer struct {
+	srv  *Server
+	conn net.Conn
+	sess *session
+	once sync.Once
+	exit chan empty
+	join chan empty
+}
+
+func (p *peer) read(b []byte) (int, bool) {
+	return p.srv.isError(p.conn.Read(b))
+}
+
+func (p *peer) readFull(b []byte) bool {
+	_, ok := p.srv.isError(io.ReadFull(p.conn, b))
+	return ok
+}
+
+func (p *peer) write(b []byte) bool {
+	_, ok := p.srv.isError(p.conn.Write(b))
+	return ok
+}
+
+func (p *peer) leave() {
+	p.once.Do(func() {
+		if p.sess != nil {
+			p.srv.leaveRoom(p.sess)
+			p.sess = nil
 		}
-		close(exit)
+		close(p.exit)
 	})
-	go func() {
-		defer leave()
-		<-join
-		for {
-			msg := s.recvMessage(sess)
-			if msg == nil {
-				return
-			}
-			if !write(msg) {
-				return
-			}
+}
+
+func (p *peer) recv() {
+	defer p.leave()
+	<-p.join
+	for {
+		msg := p.srv.recvMessage(p.sess)
+		if msg == nil {
+			return
 		}
-	}()
-	go func() {
-		defer leave()
-		buf := make([]byte, 4096)
+		if !p.write(msg) {
+			return
+		}
+	}
+}
+
+func (p *peer) send() {
+	defer p.leave()
+	buf := make([]byte, 4096)
+	for {
+		code := make([]byte, CodeSize)
+		if !p.readFull(code) {
+			return
+		}
+		roomID, ok := ParseCode(string(code))
+		if !ok {
+			return
+		}
+		var hash [sha256.Size]byte
+		if !p.readFull(hash[:]) {
+			return
+		}
+		p.sess = p.srv.joinRoom(roomID, hash)
+		if p.sess == nil {
+			p.write([]byte{0})
+			return
+		}
+		if !p.write([]byte{1}) {
+			return
+		}
+		close(p.join)
 		for {
-			code := make([]byte, CodeSize)
-			if !readFull(code) {
-				return
-			}
-			roomID, ok := ParseCode(string(code))
+			n, ok := p.read(buf)
 			if !ok {
 				return
 			}
-			var hash [sha256.Size]byte
-			if !readFull(hash[:]) {
-				return
-			}
-			sess = s.joinRoom(roomID, hash)
-			if sess == nil {
-				write([]byte{0})
-				return
-			}
-			if !write([]byte{1}) {
-				return
-			}
-			close(join)
-			for {
-				n, ok := read(buf)
-				if !ok {
-					return
-				}
-				s.sendMessage(sess, buf[:n])
-			}
+			p.srv.sendMessage(p.sess, buf[:n])
 		}
-	}()
-	select {
-	case <-s.quit:
-		conn.Close()
-		<-exit
-	case <-exit:
-		conn.Close()
 	}
-	s.wg.Done()
+}
+
+func (p *peer) run() {
+	go p.recv()
+	go p.send()
+	select {
+	case <-p.srv.quit:
+		p.conn.Close()
+		<-p.exit
+	case <-p.exit:
+		p.conn.Close()
+	}
+	p.srv.wg.Done()
 }
 
 func (s *Server) Run() error {
@@ -196,7 +219,13 @@ func (s *Server) Run() error {
 			return err
 		}
 		s.wg.Add(1)
-		go s.handleConnection(conn)
+		p := &peer{
+			srv:  s,
+			conn: conn,
+			exit: make(chan empty),
+			join: make(chan empty),
+		}
+		go p.run()
 	}
 }
 
