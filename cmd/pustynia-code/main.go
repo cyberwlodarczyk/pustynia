@@ -2,7 +2,7 @@ package main
 
 import (
 	"fmt"
-	"log"
+	"os"
 
 	"github.com/cyberwlodarczyk/pustynia"
 )
@@ -10,7 +10,8 @@ import (
 func main() {
 	c, err := pustynia.NewCode()
 	if err != nil {
-		log.Fatalln(err)
+		fmt.Printf("error generating new code: %v", err)
+		os.Exit(1)
 	}
 	fmt.Printf("%s\n", c)
 }

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"log"
 	"os"
 	"os/signal"
 	"syscall"
@@ -14,22 +13,22 @@ import (
 	"golang.org/x/term"
 )
 
-func main() {
+func run() error {
 	addr := flag.String("addr", ":8888", "server address")
 	room := flag.String("room", "", "room code")
 	username := flag.String("user", "anonymous", "room username")
 	flag.Parse()
 	if *room == "" {
-		log.Fatalln("please specify the --room flag")
+		return errors.New("please specify the --room flag")
 	}
 	roomID, ok := pustynia.ParseCode(*room)
 	if !ok {
-		log.Fatalln("please specify the valid --room flag")
+		return errors.New("please specify the valid --room flag")
 	}
 	fmt.Print("password: ")
 	password, err := term.ReadPassword(int(os.Stdin.Fd()))
 	if err != nil {
-		log.Fatalln(err)
+		return fmt.Errorf("error reading the password: %w", err)
 	}
 	fmt.Print("\n")
 	client, err := pustynia.NewClient(&pustynia.ClientConfig{
@@ -40,7 +39,7 @@ func main() {
 		TLSConfig: &tls.Config{InsecureSkipVerify: true},
 	})
 	if err != nil {
-		log.Fatalln(err)
+		return fmt.Errorf("error starting the client: %w", err)
 	}
 	defer client.Close()
 	interrupt := make(chan os.Signal, 1)
@@ -49,11 +48,15 @@ func main() {
 		<-interrupt
 		client.Close()
 	}()
-	if err = client.Run(); err != nil {
-		if errors.Is(err, pustynia.ErrInvalidPassword) {
-			fmt.Println("invalid password")
-		} else {
-			log.Fatalln(err)
-		}
+	if err := client.Run(); err != nil {
+		return fmt.Errorf("error running the client: %w", err)
+	}
+	return nil
+}
+
+func main() {
+	if err := run(); err != nil {
+		fmt.Println(err)
+		os.Exit(1)
 	}
 }

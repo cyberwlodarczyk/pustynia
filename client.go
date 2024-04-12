@@ -20,7 +20,7 @@ import (
 	"golang.org/x/crypto/argon2"
 )
 
-var ErrInvalidPassword = errors.New("pustynia: invalid password")
+var ErrInvalidPassword = errors.New("invalid password")
 
 type ClientConfig struct {
 	RoomID    Code
@@ -49,15 +49,15 @@ func NewClient(cfg *ClientConfig) (*Client, error) {
 	key := argon2.IDKey(cfg.Password, salt[:], 1, 1<<16, uint8(runtime.NumCPU()), 32)
 	block, err := aes.NewCipher(key)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("error initializing AES: %w", err)
 	}
 	aead, err := cipher.NewGCM(block)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("error initializing AES GCM: %w", err)
 	}
 	conn, err := tls.Dial("tcp", cfg.Addr, cfg.TLSConfig)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("error connecting to the server: %w", err)
 	}
 	return &Client{
 		roomID: cfg.RoomID,
@@ -75,9 +75,9 @@ func NewClient(cfg *ClientConfig) (*Client, error) {
 func (c *Client) isError(_ int, err error) bool {
 	if err != nil {
 		if isClosed(err) {
-			c.fail <- nil
+			close(c.quit)
 		} else {
-			c.fail <- err
+			c.fail <- fmt.Errorf("error interacting with the connection: %w", err)
 		}
 		return false
 	}
@@ -119,7 +119,7 @@ func (c *Client) recv() {
 		}
 		plaintext, err := c.aead.Open(nil, msg[:12], ciphertext, nil)
 		if err != nil {
-			c.fail <- err
+			c.fail <- fmt.Errorf("error decrypting and authenticating the message: %w", err)
 			return
 		}
 		for i := 0; i < len(c.label); i++ {
@@ -136,7 +136,11 @@ func (c *Client) scan() {
 	for {
 		fmt.Printf("%s", c.label)
 		if !s.Scan() {
-			c.fail <- s.Err()
+			if err := s.Err(); err != nil {
+				c.fail <- fmt.Errorf("error reading from standard input: %w", err)
+			} else {
+				close(c.quit)
+			}
 			return
 		}
 		var b bytes.Buffer
@@ -158,7 +162,7 @@ func (c *Client) Run() error {
 		case plaintext := <-c.input:
 			msg := make([]byte, 16)
 			if _, err := io.ReadFull(rand.Reader, msg[:12]); err != nil {
-				return err
+				return fmt.Errorf("error generating new nonce: %w", err)
 			}
 			msg = c.aead.Seal(msg, msg[:12], plaintext, nil)
 			binary.BigEndian.PutUint32(msg[12:16], uint32(len(msg[16:])))

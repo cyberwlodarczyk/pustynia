@@ -2,8 +2,9 @@ package main
 
 import (
 	"crypto/tls"
+	"errors"
 	"flag"
-	"log"
+	"fmt"
 	"os"
 	"os/signal"
 	"syscall"
@@ -11,20 +12,20 @@ import (
 	"github.com/cyberwlodarczyk/pustynia"
 )
 
-func main() {
+func run() error {
 	addr := flag.String("addr", ":8888", "listen address")
 	certFile := flag.String("tls-cert", "", "tls certificate file location")
 	keyFile := flag.String("tls-key", "", "tls key file location")
 	flag.Parse()
 	if *certFile == "" {
-		log.Fatalln("please specify the --tls-cert flag")
+		return errors.New("please specify the --tls-cert flag")
 	}
 	if *keyFile == "" {
-		log.Fatalln("please specify the --tls-key flag")
+		return errors.New("please specify the --tls-key flag")
 	}
 	cert, err := tls.LoadX509KeyPair(*certFile, *keyFile)
 	if err != nil {
-		log.Fatalln(err)
+		return fmt.Errorf("error loading X509 key pair: %w", err)
 	}
 	server, err := pustynia.NewServer(&pustynia.ServerConfig{
 		Addr: *addr,
@@ -34,7 +35,7 @@ func main() {
 		},
 	})
 	if err != nil {
-		log.Fatalln(err)
+		return fmt.Errorf("error starting the server: %w", err)
 	}
 	defer server.Close()
 	interrupt := make(chan os.Signal, 1)
@@ -44,6 +45,14 @@ func main() {
 		server.Close()
 	}()
 	if err = server.Run(); err != nil {
-		log.Fatalln(err)
+		return fmt.Errorf("error running the server: %w", err)
+	}
+	return nil
+}
+
+func main() {
+	if err := run(); err != nil {
+		fmt.Println(err)
+		os.Exit(1)
 	}
 }

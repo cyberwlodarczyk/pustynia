@@ -1,6 +1,9 @@
 package pustynia
 
-import "crypto/rand"
+import (
+	"crypto/rand"
+	"fmt"
+)
 
 const CodeSize = 11
 
@@ -18,7 +21,7 @@ func NewCode() (Code, error) {
 	var c Code
 	r := make([]byte, CodeSize-2)
 	if _, err := rand.Read(r); err != nil {
-		return c, err
+		return c, fmt.Errorf("error generating random numbers: %w", err)
 	}
 	for i, j := 0, 0; i < CodeSize; i++ {
 		if i == 3 || i == 7 {

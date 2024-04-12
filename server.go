@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"crypto/tls"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net"
@@ -216,7 +217,7 @@ func (s *Server) Run() error {
 			if errors.Is(err, net.ErrClosed) {
 				return nil
 			}
-			return err
+			return fmt.Errorf("error accepting connections: %w", err)
 		}
 		s.wg.Add(1)
 		p := &peer{
