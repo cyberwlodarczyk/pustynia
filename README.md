@@ -1,16 +1,16 @@
-# Pustynia 💬
+# Pustynia 🐪
 
 ## Introduction
 
-This project is a very simple chat service with minimalistic end-to-end encryption. The server's job is to manage the rooms and broadcast all of the encrypted noise to the appropriate clients. To join a room, a random 9 letter code such as `efz-fzg-tym` and a password are required. Users can see other messages and type a new one with a label like `bob> `.
+This is a very simple command-line chat service with minimalistic end-to-end encryption. The server's job is to manage rooms and broadcast encrypted data to appropriate clients. Joining a room requires a random 9-letter code such as `efz-fzg-tym` and a password. Users can see messages from others and send their own, which will appear with a label like `bob> `.
 
-## Missing features
+## Todos
 
-Due to lack of time this project lacks very important features, such as:
-
+- Docker configuration
+- Better authentication
 - Logging
+- Authorization
 - Chat history
-- Permissions
 - Rate limiting
 
 ## Contributing
