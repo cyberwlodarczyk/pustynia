@@ -1,4 +1,4 @@
-package pustynia
+package server
 
 import (
 	"crypto/sha256"
@@ -9,11 +9,12 @@ import (
 	"net"
 	"sync"
 
+	"github.com/cyberwlodarczyk/pustynia/code"
 	"github.com/sirupsen/logrus"
 )
 
 type room struct {
-	id    Code
+	id    code.Code
 	hash  [sha256.Size]byte
 	users map[int]chan []byte
 }
@@ -24,7 +25,7 @@ func (r room) info(msg string) {
 	}).Info(msg)
 }
 
-type ServerConfig struct {
+type Config struct {
 	Addr      string
 	TLSConfig *tls.Config
 }
@@ -33,26 +34,26 @@ type Server struct {
 	listener net.Listener
 	wg       sync.WaitGroup
 	once     sync.Once
-	quit     chan empty
+	quit     chan struct{}
 	rwMutex  sync.RWMutex
 	userID   int
-	rooms    map[Code]room
+	rooms    map[code.Code]room
 }
 
-func NewServer(cfg *ServerConfig) (*Server, error) {
+func New(cfg *Config) (*Server, error) {
 	listener, err := tls.Listen("tcp", cfg.Addr, cfg.TLSConfig)
 	if err != nil {
 		return nil, err
 	}
 	return &Server{
 		listener: listener,
-		quit:     make(chan empty),
-		rooms:    make(map[Code]room),
+		quit:     make(chan struct{}),
+		rooms:    make(map[code.Code]room),
 	}, nil
 }
 
 type session struct {
-	roomID Code
+	roomID code.Code
 	userID int
 }
 
@@ -63,7 +64,7 @@ func (s *session) info(msg string) {
 	}).Info(msg)
 }
 
-func (s *Server) joinRoom(roomID Code, hash [sha256.Size]byte) *session {
+func (s *Server) joinRoom(roomID code.Code, hash [sha256.Size]byte) *session {
 	s.rwMutex.Lock()
 	defer s.rwMutex.Unlock()
 	r, ok := s.rooms[roomID]
@@ -121,7 +122,7 @@ func (s *Server) recvMessage(sess *session) []byte {
 
 func (s *Server) isError(n int, err error) (int, bool) {
 	if err != nil {
-		if !isClosed(err) {
+		if err != io.EOF && !errors.Is(err, net.ErrClosed) {
 			logrus.Error(err)
 		}
 		return 0, false
@@ -134,8 +135,8 @@ type peer struct {
 	conn net.Conn
 	sess *session
 	once sync.Once
-	exit chan empty
-	join chan empty
+	exit chan struct{}
+	join chan struct{}
 }
 
 func (p *peer) read(b []byte) (int, bool) {
@@ -180,11 +181,11 @@ func (p *peer) send() {
 	defer p.leave()
 	buf := make([]byte, 4096)
 	for {
-		code := make([]byte, CodeSize)
-		if !p.readFull(code) {
+		c := make([]byte, code.Size)
+		if !p.readFull(c) {
 			return
 		}
-		roomID, ok := ParseCode(string(code))
+		roomID, ok := code.Parse(string(c))
 		if !ok {
 			return
 		}
@@ -237,8 +238,8 @@ func (s *Server) Run() error {
 		p := &peer{
 			srv:  s,
 			conn: conn,
-			exit: make(chan empty),
-			join: make(chan empty),
+			exit: make(chan struct{}),
+			join: make(chan struct{}),
 		}
 		go p.run()
 	}

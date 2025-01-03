@@ -1,13 +1,13 @@
-package pustynia
+package code
 
 import (
 	"crypto/rand"
 	"fmt"
 )
 
-const CodeSize = 11
+const Size = 11
 
-type Code [CodeSize]byte
+type Code [Size]byte
 
 func (c Code) String() string {
 	return string(c.Bytes())
@@ -17,13 +17,13 @@ func (c Code) Bytes() []byte {
 	return c[:]
 }
 
-func NewCode() (Code, error) {
+func New() (Code, error) {
 	var c Code
-	r := make([]byte, CodeSize-2)
+	r := make([]byte, Size-2)
 	if _, err := rand.Read(r); err != nil {
 		return c, fmt.Errorf("error generating random numbers: %w", err)
 	}
-	for i, j := 0, 0; i < CodeSize; i++ {
+	for i, j := 0, 0; i < Size; i++ {
 		if i == 3 || i == 7 {
 			c[i] = '-'
 		} else {
@@ -34,12 +34,12 @@ func NewCode() (Code, error) {
 	return c, nil
 }
 
-func ParseCode(s string) (Code, bool) {
+func Parse(s string) (Code, bool) {
 	var c Code
-	if len(s) != CodeSize {
+	if len(s) != Size {
 		return c, false
 	}
-	for i := 0; i < CodeSize; i++ {
+	for i := 0; i < Size; i++ {
 		if i == 3 || i == 7 {
 			if s[i] != '-' {
 				return c, false

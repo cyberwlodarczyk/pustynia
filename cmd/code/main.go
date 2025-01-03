@@ -4,11 +4,11 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/cyberwlodarczyk/pustynia"
+	"github.com/cyberwlodarczyk/pustynia/code"
 )
 
 func main() {
-	c, err := pustynia.NewCode()
+	c, err := code.New()
 	if err != nil {
 		fmt.Printf("error generating new code: %v", err)
 		os.Exit(1)

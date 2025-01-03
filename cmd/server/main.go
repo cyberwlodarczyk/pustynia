@@ -9,7 +9,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/cyberwlodarczyk/pustynia"
+	"github.com/cyberwlodarczyk/pustynia/server"
 	"github.com/sirupsen/logrus"
 )
 
@@ -28,7 +28,7 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("error loading X509 key pair: %w", err)
 	}
-	server, err := pustynia.NewServer(&pustynia.ServerConfig{
+	server, err := server.New(&server.Config{
 		Addr: *addr,
 		TLSConfig: &tls.Config{
 			Certificates: []tls.Certificate{cert},

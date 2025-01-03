@@ -1,20 +1,20 @@
-package pustynia
+package code
 
 import "testing"
 
-func TestNewCode(t *testing.T) {
+func TestNew(t *testing.T) {
 	for i := 0; i < 1000; i++ {
-		c, err := NewCode()
+		c, err := New()
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, ok := ParseCode(c.String()); !ok {
+		if _, ok := Parse(c.String()); !ok {
 			t.Fatalf("expected %q to be valid", c)
 		}
 	}
 }
 
-func TestParseCode(t *testing.T) {
+func TestParse(t *testing.T) {
 	tests := []struct {
 		code     string
 		expected bool
@@ -28,7 +28,7 @@ func TestParseCode(t *testing.T) {
 		{"-spdj-sodsm", false},
 	}
 	for _, test := range tests {
-		code, got := ParseCode(test.code)
+		code, got := Parse(test.code)
 		if got != test.expected {
 			if test.expected {
 				t.Fatalf("expected %q to be valid", test.code)

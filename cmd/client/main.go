@@ -9,7 +9,8 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/cyberwlodarczyk/pustynia"
+	"github.com/cyberwlodarczyk/pustynia/client"
+	"github.com/cyberwlodarczyk/pustynia/code"
 	"golang.org/x/term"
 )
 
@@ -21,7 +22,7 @@ func run() error {
 	if *room == "" {
 		return errors.New("please specify the --room flag")
 	}
-	roomID, ok := pustynia.ParseCode(*room)
+	roomID, ok := code.Parse(*room)
 	if !ok {
 		return errors.New("please specify the valid --room flag")
 	}
@@ -31,7 +32,7 @@ func run() error {
 		return fmt.Errorf("error reading the password: %w", err)
 	}
 	fmt.Print("\n")
-	client, err := pustynia.NewClient(&pustynia.ClientConfig{
+	client, err := client.New(&client.Config{
 		RoomID:    roomID,
 		Username:  *username,
 		Password:  password,

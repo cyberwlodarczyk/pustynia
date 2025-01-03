@@ -1,4 +1,4 @@
-package pustynia
+package client
 
 import (
 	"bufio"
@@ -17,13 +17,14 @@ import (
 	"runtime"
 	"sync"
 
+	"github.com/cyberwlodarczyk/pustynia/code"
 	"golang.org/x/crypto/argon2"
 )
 
 var ErrInvalidPassword = errors.New("invalid password")
 
-type ClientConfig struct {
-	RoomID    Code
+type Config struct {
+	RoomID    code.Code
 	Username  string
 	Password  []byte
 	Addr      string
@@ -31,20 +32,24 @@ type ClientConfig struct {
 }
 
 type Client struct {
-	roomID Code
+	roomID code.Code
 	label  []byte
 	hash   [sha256.Size]byte
 	aead   cipher.AEAD
 	conn   net.Conn
 	once   sync.Once
-	quit   chan empty
+	quit   chan struct{}
 	fail   chan error
-	join   chan empty
+	join   chan struct{}
 	input  chan []byte
 }
 
-func NewClient(cfg *ClientConfig) (*Client, error) {
-	defer zero(cfg.Password)
+func New(cfg *Config) (*Client, error) {
+	defer func() {
+		for i := range cfg.Password {
+			cfg.Password[i] = 0
+		}
+	}()
 	salt := sha256.Sum256(cfg.RoomID.Bytes())
 	key := argon2.IDKey(cfg.Password, salt[:], 1, 1<<16, uint8(runtime.NumCPU()), 32)
 	block, err := aes.NewCipher(key)
@@ -65,16 +70,16 @@ func NewClient(cfg *ClientConfig) (*Client, error) {
 		hash:   sha256.Sum256(cfg.Password),
 		aead:   aead,
 		conn:   conn,
-		quit:   make(chan empty),
+		quit:   make(chan struct{}),
 		fail:   make(chan error),
-		join:   make(chan empty),
+		join:   make(chan struct{}),
 		input:  make(chan []byte),
 	}, nil
 }
 
 func (c *Client) isError(_ int, err error) bool {
 	if err != nil {
-		if isClosed(err) {
+		if err == io.EOF || errors.Is(err, net.ErrClosed) {
 			close(c.quit)
 		} else {
 			c.fail <- fmt.Errorf("error interacting with the connection: %w", err)
