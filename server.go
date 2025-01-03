@@ -6,24 +6,30 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"sync"
+
+	"github.com/sirupsen/logrus"
 )
 
 type room struct {
+	id    Code
 	hash  [sha256.Size]byte
 	users map[int]chan []byte
+}
+
+func (r room) info(msg string) {
+	logrus.WithFields(logrus.Fields{
+		"roomId": r.id.String(),
+	}).Info(msg)
 }
 
 type ServerConfig struct {
 	Addr      string
 	TLSConfig *tls.Config
-	ErrorLog  *log.Logger
 }
 
 type Server struct {
-	errorLog *log.Logger
 	listener net.Listener
 	wg       sync.WaitGroup
 	once     sync.Once
@@ -34,15 +40,11 @@ type Server struct {
 }
 
 func NewServer(cfg *ServerConfig) (*Server, error) {
-	if cfg.ErrorLog == nil {
-		cfg.ErrorLog = log.Default()
-	}
 	listener, err := tls.Listen("tcp", cfg.Addr, cfg.TLSConfig)
 	if err != nil {
 		return nil, err
 	}
 	return &Server{
-		errorLog: cfg.ErrorLog,
 		listener: listener,
 		quit:     make(chan empty),
 		rooms:    make(map[Code]room),
@@ -54,6 +56,13 @@ type session struct {
 	userID int
 }
 
+func (s *session) info(msg string) {
+	logrus.WithFields(logrus.Fields{
+		"roomId": s.roomID.String(),
+		"userId": s.userID,
+	}).Info(msg)
+}
+
 func (s *Server) joinRoom(roomID Code, hash [sha256.Size]byte) *session {
 	s.rwMutex.Lock()
 	defer s.rwMutex.Unlock()
@@ -63,13 +72,16 @@ func (s *Server) joinRoom(roomID Code, hash [sha256.Size]byte) *session {
 			return nil
 		}
 	} else {
-		r = room{hash, make(map[int]chan []byte)}
+		r = room{roomID, hash, make(map[int]chan []byte)}
 		s.rooms[roomID] = r
+		r.info("created")
 	}
 	userID := s.userID
 	s.userID++
 	r.users[userID] = make(chan []byte)
-	return &session{roomID, userID}
+	sess := &session{roomID, userID}
+	sess.info("joined")
+	return sess
 }
 
 func (s *Server) leaveRoom(sess *session) {
@@ -83,7 +95,9 @@ func (s *Server) leaveRoom(sess *session) {
 	delete(r.users, sess.userID)
 	if len(r.users) == 0 {
 		delete(s.rooms, sess.roomID)
+		r.info("deleted")
 	}
+	sess.info("left")
 }
 
 func (s *Server) sendMessage(sess *session, msg []byte) {
@@ -108,7 +122,7 @@ func (s *Server) recvMessage(sess *session) []byte {
 func (s *Server) isError(n int, err error) (int, bool) {
 	if err != nil {
 		if !isClosed(err) {
-			s.errorLog.Println(err)
+			logrus.Error(err)
 		}
 		return 0, false
 	}

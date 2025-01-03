@@ -10,6 +10,7 @@ import (
 	"syscall"
 
 	"github.com/cyberwlodarczyk/pustynia"
+	"github.com/sirupsen/logrus"
 )
 
 func run() error {
@@ -51,8 +52,8 @@ func run() error {
 }
 
 func main() {
+	logrus.SetFormatter(&logrus.JSONFormatter{})
 	if err := run(); err != nil {
-		fmt.Println(err)
-		os.Exit(1)
+		logrus.Fatal(err)
 	}
 }
