@@ -18,13 +18,14 @@ import (
 	"sync"
 
 	"github.com/cyberwlodarczyk/pustynia/code"
+	"github.com/cyberwlodarczyk/pustynia/server"
 	"golang.org/x/crypto/argon2"
 )
 
 var ErrInvalidPassword = errors.New("invalid password")
 
 type Config struct {
-	RoomID    code.Code
+	RoomCode  code.Code
 	Username  string
 	Password  []byte
 	Addr      string
@@ -32,16 +33,16 @@ type Config struct {
 }
 
 type Client struct {
-	roomID code.Code
-	label  []byte
-	hash   [sha256.Size]byte
-	aead   cipher.AEAD
-	conn   net.Conn
-	once   sync.Once
-	quit   chan struct{}
-	fail   chan error
-	join   chan struct{}
-	input  chan []byte
+	roomCode code.Code
+	label    []byte
+	hash     [sha256.Size]byte
+	aead     cipher.AEAD
+	conn     net.Conn
+	once     sync.Once
+	quit     chan struct{}
+	fail     chan error
+	join     chan struct{}
+	input    chan []byte
 }
 
 func New(cfg *Config) (*Client, error) {
@@ -50,13 +51,16 @@ func New(cfg *Config) (*Client, error) {
 			cfg.Password[i] = 0
 		}
 	}()
-	salt := sha256.Sum256(cfg.RoomID.Bytes())
+	if cfg.Addr == "" {
+		cfg.Addr = server.DefaultAddr
+	}
+	salt := sha256.Sum256(cfg.RoomCode.Bytes())
 	key := argon2.IDKey(cfg.Password, salt[:], 1, 1<<16, uint8(runtime.NumCPU()), 32)
 	block, err := aes.NewCipher(key)
 	if err != nil {
 		return nil, fmt.Errorf("error initializing AES: %w", err)
 	}
-	aead, err := cipher.NewGCM(block)
+	gcm, err := cipher.NewGCM(block)
 	if err != nil {
 		return nil, fmt.Errorf("error initializing AES GCM: %w", err)
 	}
@@ -65,15 +69,15 @@ func New(cfg *Config) (*Client, error) {
 		return nil, fmt.Errorf("error connecting to the server: %w", err)
 	}
 	return &Client{
-		roomID: cfg.RoomID,
-		label:  []byte(fmt.Sprintf("%s> ", cfg.Username)),
-		hash:   sha256.Sum256(cfg.Password),
-		aead:   aead,
-		conn:   conn,
-		quit:   make(chan struct{}),
-		fail:   make(chan error),
-		join:   make(chan struct{}),
-		input:  make(chan []byte),
+		roomCode: cfg.RoomCode,
+		label:    []byte(fmt.Sprintf("%s> ", cfg.Username)),
+		hash:     sha256.Sum256(cfg.Password),
+		aead:     gcm,
+		conn:     conn,
+		quit:     make(chan struct{}),
+		fail:     make(chan error),
+		join:     make(chan struct{}),
+		input:    make(chan []byte),
 	}, nil
 }
 
@@ -98,7 +102,7 @@ func (c *Client) write(b []byte) bool {
 }
 
 func (c *Client) recv() {
-	if !c.write(c.roomID.Bytes()) {
+	if !c.write(c.roomCode.Bytes()) {
 		return
 	}
 	if !c.write(c.hash[:]) {
@@ -118,11 +122,11 @@ func (c *Client) recv() {
 		if !c.read(msg) {
 			return
 		}
-		ciphertext := make([]byte, int(binary.BigEndian.Uint32(msg[12:])))
-		if !c.read(ciphertext) {
+		ct := make([]byte, int(binary.BigEndian.Uint32(msg[12:])))
+		if !c.read(ct) {
 			return
 		}
-		plaintext, err := c.aead.Open(nil, msg[:12], ciphertext, nil)
+		pt, err := c.aead.Open(nil, msg[:12], ct, nil)
 		if err != nil {
 			c.fail <- fmt.Errorf("error decrypting and authenticating the message: %w", err)
 			return
@@ -130,7 +134,7 @@ func (c *Client) recv() {
 		for i := 0; i < len(c.label); i++ {
 			fmt.Print("\b \b")
 		}
-		fmt.Printf("%s\n", plaintext)
+		fmt.Printf("%s\n", pt)
 		fmt.Printf("%s", c.label)
 	}
 }
@@ -164,12 +168,12 @@ func (c *Client) Run() error {
 			return nil
 		case err := <-c.fail:
 			return err
-		case plaintext := <-c.input:
+		case pt := <-c.input:
 			msg := make([]byte, 16)
 			if _, err := io.ReadFull(rand.Reader, msg[:12]); err != nil {
 				return fmt.Errorf("error generating new nonce: %w", err)
 			}
-			msg = c.aead.Seal(msg, msg[:12], plaintext, nil)
+			msg = c.aead.Seal(msg, msg[:12], pt, nil)
 			binary.BigEndian.PutUint32(msg[12:16], uint32(len(msg[16:])))
 			c.write(msg)
 		}

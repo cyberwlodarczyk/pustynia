@@ -11,18 +11,19 @@ import (
 
 	"github.com/cyberwlodarczyk/pustynia/client"
 	"github.com/cyberwlodarczyk/pustynia/code"
+	"github.com/cyberwlodarczyk/pustynia/server"
 	"golang.org/x/term"
 )
 
 func run() error {
-	addr := flag.String("addr", ":8888", "server address")
+	addr := flag.String("addr", server.DefaultAddr, "server address")
 	room := flag.String("room", "", "room code")
 	username := flag.String("user", "anonymous", "room username")
 	flag.Parse()
 	if *room == "" {
 		return errors.New("please specify the --room flag")
 	}
-	roomID, ok := code.Parse(*room)
+	roomCode, ok := code.Parse(*room)
 	if !ok {
 		return errors.New("please specify the valid --room flag")
 	}
@@ -32,8 +33,8 @@ func run() error {
 		return fmt.Errorf("error reading the password: %w", err)
 	}
 	fmt.Print("\n")
-	client, err := client.New(&client.Config{
-		RoomID:    roomID,
+	c, err := client.New(&client.Config{
+		RoomCode:  roomCode,
 		Username:  *username,
 		Password:  password,
 		Addr:      *addr,
@@ -42,14 +43,17 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("error starting the client: %w", err)
 	}
-	defer client.Close()
+	defer c.Close()
 	interrupt := make(chan os.Signal, 1)
 	signal.Notify(interrupt, syscall.SIGTERM, syscall.SIGINT)
 	go func() {
 		<-interrupt
-		client.Close()
+		c.Close()
 	}()
-	if err := client.Run(); err != nil {
+	if err := c.Run(); err != nil {
+		if errors.Is(err, client.ErrInvalidPassword) {
+			return err
+		}
 		return fmt.Errorf("error running the client: %w", err)
 	}
 	return nil

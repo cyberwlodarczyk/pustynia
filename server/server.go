@@ -13,21 +13,23 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-type room struct {
-	id    code.Code
-	hash  [sha256.Size]byte
-	users map[int]chan []byte
-}
-
-func (r room) info(msg string) {
-	logrus.WithFields(logrus.Fields{
-		"roomId": r.id.String(),
-	}).Info(msg)
-}
+var DefaultAddr = ":1984"
 
 type Config struct {
 	Addr      string
 	TLSConfig *tls.Config
+}
+
+type user struct {
+	id       int
+	messages chan []byte
+}
+
+type room struct {
+	id    int
+	code  code.Code
+	hash  [sha256.Size]byte
+	users map[int]user
 }
 
 type Server struct {
@@ -36,78 +38,84 @@ type Server struct {
 	once     sync.Once
 	quit     chan struct{}
 	rwMutex  sync.RWMutex
+	roomID   int
 	userID   int
-	rooms    map[code.Code]room
+	rooms    map[int]room
+	codes    map[code.Code]int
 }
 
 func New(cfg *Config) (*Server, error) {
-	listener, err := tls.Listen("tcp", cfg.Addr, cfg.TLSConfig)
+	if cfg.Addr == "" {
+		cfg.Addr = DefaultAddr
+	}
+	l, err := tls.Listen("tcp", cfg.Addr, cfg.TLSConfig)
 	if err != nil {
 		return nil, err
 	}
 	return &Server{
-		listener: listener,
+		listener: l,
 		quit:     make(chan struct{}),
-		rooms:    make(map[code.Code]room),
+		rooms:    make(map[int]room),
+		codes:    make(map[code.Code]int),
 	}, nil
 }
 
 type session struct {
-	roomID code.Code
+	roomID int
 	userID int
 }
 
-func (s *session) info(msg string) {
-	logrus.WithFields(logrus.Fields{
-		"roomId": s.roomID.String(),
-		"userId": s.userID,
-	}).Info(msg)
-}
-
-func (s *Server) joinRoom(roomID code.Code, hash [sha256.Size]byte) *session {
+func (s *Server) createSession(c code.Code, h [sha256.Size]byte) *session {
 	s.rwMutex.Lock()
 	defer s.rwMutex.Unlock()
-	r, ok := s.rooms[roomID]
+	var r room
+	rid, ok := s.codes[c]
 	if ok {
-		if r.hash != hash {
+		r = s.rooms[rid]
+		if r.hash != h {
+			logrus.WithField("roomId", r.id).Info("user authentication failed")
 			return nil
 		}
 	} else {
-		r = room{roomID, hash, make(map[int]chan []byte)}
-		s.rooms[roomID] = r
-		r.info("created")
+		rid = s.roomID
+		s.roomID++
+		s.codes[c] = rid
+		r = room{rid, c, h, make(map[int]user)}
+		s.rooms[rid] = r
+		logrus.WithField("roomId", r.id).WithField("roomCode", r.code.String()).Info("room created")
 	}
-	userID := s.userID
+	uid := s.userID
 	s.userID++
-	r.users[userID] = make(chan []byte)
-	sess := &session{roomID, userID}
-	sess.info("joined")
-	return sess
+	u := user{uid, make(chan []byte)}
+	r.users[uid] = u
+	logrus.WithField("roomId", r.id).WithField("userId", u.id).Info("user created")
+	return &session{r.id, u.id}
 }
 
-func (s *Server) leaveRoom(sess *session) {
+func (s *Server) deleteSession(sess *session) {
 	s.rwMutex.RLock()
 	r := s.rooms[sess.roomID]
-	ch := r.users[sess.userID]
-	close(ch)
+	u := r.users[sess.userID]
+	close(u.messages)
 	s.rwMutex.RUnlock()
 	s.rwMutex.Lock()
 	defer s.rwMutex.Unlock()
-	delete(r.users, sess.userID)
+	delete(r.users, u.id)
+	logrus.WithField("roomId", r.id).WithField("userId", u.id).Info("user deleted")
 	if len(r.users) == 0 {
-		delete(s.rooms, sess.roomID)
-		r.info("deleted")
+		delete(s.rooms, r.id)
+		delete(s.codes, r.code)
+		logrus.WithField("roomId", r.id).Info("room deleted")
 	}
-	sess.info("left")
 }
 
 func (s *Server) sendMessage(sess *session, msg []byte) {
 	s.rwMutex.RLock()
 	defer s.rwMutex.RUnlock()
 	r := s.rooms[sess.roomID]
-	for userID, ch := range r.users {
-		if userID != sess.userID {
-			ch <- msg
+	for _, u := range r.users {
+		if u.id != sess.userID {
+			u.messages <- msg
 		}
 	}
 }
@@ -115,9 +123,9 @@ func (s *Server) sendMessage(sess *session, msg []byte) {
 func (s *Server) recvMessage(sess *session) []byte {
 	s.rwMutex.RLock()
 	r := s.rooms[sess.roomID]
-	ch := r.users[sess.userID]
+	u := r.users[sess.userID]
 	s.rwMutex.RUnlock()
-	return <-ch
+	return <-u.messages
 }
 
 func (s *Server) isError(n int, err error) (int, bool) {
@@ -156,7 +164,7 @@ func (p *peer) write(b []byte) bool {
 func (p *peer) leave() {
 	p.once.Do(func() {
 		if p.sess != nil {
-			p.srv.leaveRoom(p.sess)
+			p.srv.deleteSession(p.sess)
 			p.sess = nil
 		}
 		close(p.exit)
@@ -179,21 +187,21 @@ func (p *peer) recv() {
 
 func (p *peer) send() {
 	defer p.leave()
-	buf := make([]byte, 4096)
+	b := make([]byte, 4096)
 	for {
-		c := make([]byte, code.Size)
-		if !p.readFull(c) {
+		cb := make([]byte, code.Size)
+		if !p.readFull(cb) {
 			return
 		}
-		roomID, ok := code.Parse(string(c))
+		c, ok := code.Parse(string(cb))
 		if !ok {
 			return
 		}
-		var hash [sha256.Size]byte
-		if !p.readFull(hash[:]) {
+		var h [sha256.Size]byte
+		if !p.readFull(h[:]) {
 			return
 		}
-		p.sess = p.srv.joinRoom(roomID, hash)
+		p.sess = p.srv.createSession(c, h)
 		if p.sess == nil {
 			p.write([]byte{0})
 			return
@@ -203,11 +211,11 @@ func (p *peer) send() {
 		}
 		close(p.join)
 		for {
-			n, ok := p.read(buf)
+			n, ok := p.read(b)
 			if !ok {
 				return
 			}
-			p.srv.sendMessage(p.sess, buf[:n])
+			p.srv.sendMessage(p.sess, b[:n])
 		}
 	}
 }

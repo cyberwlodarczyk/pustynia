@@ -14,7 +14,7 @@ import (
 )
 
 func run() error {
-	addr := flag.String("addr", ":8888", "listen address")
+	addr := flag.String("addr", server.DefaultAddr, "listen address")
 	certFile := flag.String("tls-cert", "", "tls certificate file location")
 	keyFile := flag.String("tls-key", "", "tls key file location")
 	flag.Parse()
@@ -28,7 +28,7 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("error loading X509 key pair: %w", err)
 	}
-	server, err := server.New(&server.Config{
+	s, err := server.New(&server.Config{
 		Addr: *addr,
 		TLSConfig: &tls.Config{
 			Certificates: []tls.Certificate{cert},
@@ -38,14 +38,14 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("error starting the server: %w", err)
 	}
-	defer server.Close()
+	defer s.Close()
 	interrupt := make(chan os.Signal, 1)
 	signal.Notify(interrupt, syscall.SIGTERM, syscall.SIGINT)
 	go func() {
 		<-interrupt
-		server.Close()
+		s.Close()
 	}()
-	if err = server.Run(); err != nil {
+	if err = s.Run(); err != nil {
 		return fmt.Errorf("error running the server: %w", err)
 	}
 	return nil
