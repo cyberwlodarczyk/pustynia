@@ -14,15 +14,14 @@ import (
 	"io"
 	"net"
 	"os"
-	"runtime"
 	"sync"
 
 	"github.com/cyberwlodarczyk/pustynia/code"
+	"github.com/cyberwlodarczyk/pustynia/password"
 	"github.com/cyberwlodarczyk/pustynia/server"
-	"golang.org/x/crypto/argon2"
 )
 
-var ErrInvalidPassword = errors.New("invalid password")
+var ErrInvalidPassword = errors.New("password is invalid")
 
 type Config struct {
 	RoomCode  code.Code
@@ -55,7 +54,7 @@ func New(cfg *Config) (*Client, error) {
 		cfg.Addr = server.DefaultAddr
 	}
 	salt := sha256.Sum256(cfg.RoomCode.Bytes())
-	key := argon2.IDKey(cfg.Password, salt[:], 1, 1<<16, uint8(runtime.NumCPU()), 32)
+	key := password.Hash(cfg.Password, salt[:], password.DefaultParams)
 	block, err := aes.NewCipher(key)
 	if err != nil {
 		return nil, fmt.Errorf("error initializing AES: %w", err)

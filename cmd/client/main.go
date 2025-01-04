@@ -11,6 +11,7 @@ import (
 
 	"github.com/cyberwlodarczyk/pustynia/client"
 	"github.com/cyberwlodarczyk/pustynia/code"
+	"github.com/cyberwlodarczyk/pustynia/password"
 	"github.com/cyberwlodarczyk/pustynia/server"
 	"golang.org/x/term"
 )
@@ -28,15 +29,18 @@ func run() error {
 		return errors.New("please specify the valid --room flag")
 	}
 	fmt.Print("password: ")
-	password, err := term.ReadPassword(int(os.Stdin.Fd()))
+	pass, err := term.ReadPassword(int(os.Stdin.Fd()))
 	if err != nil {
 		return fmt.Errorf("error reading the password: %w", err)
 	}
 	fmt.Print("\n")
+	if !password.IsValid(pass, password.DefaultPolicy) {
+		return errors.New("password is too weak or too long")
+	}
 	c, err := client.New(&client.Config{
 		RoomCode:  roomCode,
 		Username:  *username,
-		Password:  password,
+		Password:  pass,
 		Addr:      *addr,
 		TLSConfig: &tls.Config{InsecureSkipVerify: true},
 	})
