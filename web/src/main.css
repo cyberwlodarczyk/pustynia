@@ -1,0 +1,29 @@
+:root {
+  --text: #ebfff4;
+  --background: #002912;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html {
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+body {
+  flex-grow: 1;
+  font-family: 'Funnel Display', serif;
+  font-optical-sizing: auto;
+  font-weight: 400;
+  font-style: normal;
+  color: var(--text);
+  background-color: var(--background);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
